@@ -1,0 +1,409 @@
+{
+  "version": 1,
+  "cards": [
+    {
+      "id": "gay-erotic-01",
+      "track": "gay",
+      "genre": "erotic",
+      "title": "Placeholder erotic 1",
+      "text": "PLACEHOLDER: describe task. Players: {giver}, {receiver}.",
+      "roles": [
+        "giver",
+        "receiver"
+      ],
+      "minPlayers": 2,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "gay-erotic-02",
+      "track": "gay",
+      "genre": "erotic",
+      "title": "Placeholder erotic 2",
+      "text": "PLACEHOLDER: describe task. Players: {giver}, {receiver}.",
+      "roles": [
+        "giver",
+        "receiver"
+      ],
+      "minPlayers": 2,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "gay-oral-01",
+      "track": "gay",
+      "genre": "oral",
+      "title": "Placeholder oral 1",
+      "text": "PLACEHOLDER: describe task. Players: {giver}, {receiver}.",
+      "roles": [
+        "giver",
+        "receiver"
+      ],
+      "minPlayers": 2,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "gay-oral-02",
+      "track": "gay",
+      "genre": "oral",
+      "title": "Placeholder oral 2",
+      "text": "PLACEHOLDER: describe task. Players: {giver}, {receiver}.",
+      "roles": [
+        "giver",
+        "receiver"
+      ],
+      "minPlayers": 2,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "gay-anal-01",
+      "track": "gay",
+      "genre": "anal",
+      "title": "Placeholder anal 1",
+      "text": "PLACEHOLDER: describe task. Players: {top}, {bottom}.",
+      "roles": [
+        "top",
+        "bottom"
+      ],
+      "minPlayers": 2,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "gay-anal-02",
+      "track": "gay",
+      "genre": "anal",
+      "title": "Placeholder anal 2",
+      "text": "PLACEHOLDER: describe task. Players: {top}, {bottom}.",
+      "roles": [
+        "top",
+        "bottom"
+      ],
+      "minPlayers": 2,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "gay-threesome-01",
+      "track": "gay",
+      "genre": "threesome",
+      "title": "Placeholder threesome 1",
+      "text": "PLACEHOLDER: describe task. Players: {A}, {B}, {C}.",
+      "roles": [
+        "A",
+        "B",
+        "C"
+      ],
+      "minPlayers": 3,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "gay-threesome-02",
+      "track": "gay",
+      "genre": "threesome",
+      "title": "Placeholder threesome 2",
+      "text": "PLACEHOLDER: describe task. Players: {A}, {B}, {C}.",
+      "roles": [
+        "A",
+        "B",
+        "C"
+      ],
+      "minPlayers": 3,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "gay-group-01",
+      "track": "gay",
+      "genre": "group",
+      "title": "Placeholder group 1",
+      "text": "PLACEHOLDER: describe task. Players: {A}, {B}, {C}.",
+      "roles": [
+        "A",
+        "B",
+        "C"
+      ],
+      "minPlayers": 4,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "gay-group-02",
+      "track": "gay",
+      "genre": "group",
+      "title": "Placeholder group 2",
+      "text": "PLACEHOLDER: describe task. Players: {A}, {B}, {C}.",
+      "roles": [
+        "A",
+        "B",
+        "C"
+      ],
+      "minPlayers": 4,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "gay-master_slave-01",
+      "track": "gay",
+      "genre": "master_slave",
+      "title": "Placeholder master slave 1",
+      "text": "PLACEHOLDER: describe task. Players: {master}, {slave}.",
+      "roles": [
+        "master",
+        "slave"
+      ],
+      "minPlayers": 2,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "gay-master_slave-02",
+      "track": "gay",
+      "genre": "master_slave",
+      "title": "Placeholder master slave 2",
+      "text": "PLACEHOLDER: describe task. Players: {master}, {slave}.",
+      "roles": [
+        "master",
+        "slave"
+      ],
+      "minPlayers": 2,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "straight-erotic-01",
+      "track": "straight",
+      "genre": "erotic",
+      "title": "Placeholder erotic 1",
+      "text": "PLACEHOLDER: describe task. Players: {giver}, {receiver}.",
+      "roles": [
+        "giver",
+        "receiver"
+      ],
+      "minPlayers": 2,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "straight-erotic-02",
+      "track": "straight",
+      "genre": "erotic",
+      "title": "Placeholder erotic 2",
+      "text": "PLACEHOLDER: describe task. Players: {giver}, {receiver}.",
+      "roles": [
+        "giver",
+        "receiver"
+      ],
+      "minPlayers": 2,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "straight-oral-01",
+      "track": "straight",
+      "genre": "oral",
+      "title": "Placeholder oral 1",
+      "text": "PLACEHOLDER: describe task. Players: {giver}, {receiver}.",
+      "roles": [
+        "giver",
+        "receiver"
+      ],
+      "minPlayers": 2,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "straight-oral-02",
+      "track": "straight",
+      "genre": "oral",
+      "title": "Placeholder oral 2",
+      "text": "PLACEHOLDER: describe task. Players: {giver}, {receiver}.",
+      "roles": [
+        "giver",
+        "receiver"
+      ],
+      "minPlayers": 2,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "straight-anal-01",
+      "track": "straight",
+      "genre": "anal",
+      "title": "Placeholder anal 1",
+      "text": "PLACEHOLDER: describe task. Players: {top}, {bottom}.",
+      "roles": [
+        "top",
+        "bottom"
+      ],
+      "minPlayers": 2,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "straight-anal-02",
+      "track": "straight",
+      "genre": "anal",
+      "title": "Placeholder anal 2",
+      "text": "PLACEHOLDER: describe task. Players: {top}, {bottom}.",
+      "roles": [
+        "top",
+        "bottom"
+      ],
+      "minPlayers": 2,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "straight-threesome-01",
+      "track": "straight",
+      "genre": "threesome",
+      "title": "Placeholder threesome 1",
+      "text": "PLACEHOLDER: describe task. Players: {A}, {B}, {C}.",
+      "roles": [
+        "A",
+        "B",
+        "C"
+      ],
+      "minPlayers": 3,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "straight-threesome-02",
+      "track": "straight",
+      "genre": "threesome",
+      "title": "Placeholder threesome 2",
+      "text": "PLACEHOLDER: describe task. Players: {A}, {B}, {C}.",
+      "roles": [
+        "A",
+        "B",
+        "C"
+      ],
+      "minPlayers": 3,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "straight-group-01",
+      "track": "straight",
+      "genre": "group",
+      "title": "Placeholder group 1",
+      "text": "PLACEHOLDER: describe task. Players: {A}, {B}, {C}.",
+      "roles": [
+        "A",
+        "B",
+        "C"
+      ],
+      "minPlayers": 4,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "straight-group-02",
+      "track": "straight",
+      "genre": "group",
+      "title": "Placeholder group 2",
+      "text": "PLACEHOLDER: describe task. Players: {A}, {B}, {C}.",
+      "roles": [
+        "A",
+        "B",
+        "C"
+      ],
+      "minPlayers": 4,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    },
+    {
+      "id": "straight-master_slave-01",
+      "track": "straight",
+      "genre": "master_slave",
+      "title": "Placeholder master slave 1",
+      "text": "PLACEHOLDER: describe task. Players: {master}, {slave}.",
+      "roles": [
+        "master",
+        "slave"
+      ],
+      "minPlayers": 2,
+      "intensity": "warm",
+      "tags": [
+        "placeholder"
+      ],
+      "durationSeconds": 60
+    },
+    {
+      "id": "straight-master_slave-02",
+      "track": "straight",
+      "genre": "master_slave",
+      "title": "Placeholder master slave 2",
+      "text": "PLACEHOLDER: describe task. Players: {master}, {slave}.",
+      "roles": [
+        "master",
+        "slave"
+      ],
+      "minPlayers": 2,
+      "intensity": "hot",
+      "tags": [
+        "placeholder"
+      ]
+    }
+  ]
+}

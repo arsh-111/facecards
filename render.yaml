@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: night-cards
+    runtime: node
+    plan: starter
+    # --include=dev: NODE_ENV=production would otherwise skip build tooling (see DECISIONS.md)
+    buildCommand: npm ci --include=dev && npm run build
+    # The server applies pending /drizzle migrations before it starts listening.
+    startCommand: npm run start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: night-cards-db
+          property: connectionString
+      - key: SESSION_HASH_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGIN
+        sync: false
+      - key: SESSION_IDLE_HOURS
+        value: 3
+      - key: SESSION_ABSOLUTE_HOURS
+        value: 24
+      - key: ROOM_IDLE_HOURS
+        value: 6
+
+databases:
+  - name: night-cards-db
+    plan: basic-256mb

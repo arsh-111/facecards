@@ -1,0 +1,32 @@
+# Decisions
+
+Where the PRD was ambiguous, I made the smallest reasonable choice (PRD §0.8). Newest at the bottom.
+
+| # | Topic | Decision | Why |
+|---|---|---|---|
+| 1 | Local database | Without `DATABASE_URL` (dev/test only), the server uses embedded **PGlite** (real Postgres in WASM) through the same Drizzle schema and migrations. Production refuses to start without `DATABASE_URL`. | No Postgres or Docker on the build machine; tests and E2E run with no external services. |
+| 2 | Migrations at start | `npm start` runs the server, which applies `/drizzle` migrations with Drizzle's programmatic migrator before listening. `drizzle-kit` is used only to *generate* SQL. | Equivalent to `drizzle-kit migrate` but needs no dev dependencies at runtime and works for PGlite too. |
+| 3 | Render build | `buildCommand: npm ci --include=dev && npm run build` | `NODE_ENV=production` makes `npm ci` skip devDependencies (Vite, tsup, TypeScript). |
+| 4 | Shared package | `@nc/shared` ships TypeScript source; Vite compiles it for web, tsup bundles it into the server. Its `build` script is a typecheck. | Simplest monorepo setup with no separate emit step. |
+| 5 | Non-binary matching | Non-binary players are tried as either gender; the first rule in `TRACK_RULES` that fits wins. | §5.1: "matched by their stated preference". |
+| 6 | 3+ mixed groups | `straight` when every man is attracted to women and every woman to men (`both` counts). | §5.1 says "MMF / MFF aware" without exact rules. |
+| 7 | No matching deck | The host proposes a track; it applies only after **every** player confirms. Any change in who is playing resets the agreement. Pass and Play confirms at once on the shared screen. | §5.1 "only if all players confirm". |
+| 8 | FR-20 player caps | Couple genres (min 2: erotic, oral, anal, master_slave) are offered only with exactly 2 players. Threesome needs ≥3, group ≥4. Rooms hold at most 8. | Reads "2 for couple tracks, up to 8 for group genres" as genre availability. |
+| 9 | Pass and Play / Solo | Both are server rooms (`mode = pass_and_play`) with one device and no shareable code. Extra players are "local" rows in `room_players` (`session_id` null, `local_profile` jsonb with nickname, gender and preference). They share the host's genres; the host's boundaries apply. Solo Preview pre-adds an editable "Partner" matched to the host's preference. | Card text still flows only through the verified server session (Hard Rule 1). |
+| 10 | Joining mid-game | Joining is allowed only in the lobby; existing members can always reconnect. Kicked sessions cannot rejoin that room. | Keeps deck and role state consistent. |
+| 11 | Role confirmation | After a draw, the card back shows the role assignment. Any player can **Swap roles** (rotate) or **Reveal**. Text is sent only after reveal. | FR-10 "confirm or swap roles before the card is revealed". |
+| 12 | Swap vs Skip | Swap replaces the card with another from the same genre. Neither Swap nor "Never" counts as a skip in stats. Stops are never recorded anywhere. | FR-16, FR-26. |
+| 13 | Intensity filter | The lobby sets a *maximum* intensity (Any / Warm / Hot / Intense). Cards without `intensity` are always included. | FR-18. |
+| 14 | Turn order | Online: only the current player or the host can draw. Host-picks mode adds a `turn:set` event. Away players are skipped. | FR-17. |
+| 15 | Extra WS events | Beyond §11.4 the server also accepts `room:setOptions`, `room:setRolePrefs`, `room:proposeTrack`, `room:confirmTrack`, `room:addLocal`, `room:updateLocal`, `room:removeLocal`, `room:playAgain`, `room:leave`, `card:never`, `deck:reshuffle`, `roles:swap`, `turn:set`, `game:end`. It also emits `room:superseded`, `room:kicked` and `room:closed`. | Needed for lobby, Pass and Play, reshuffle prompt and multi-tab rules. `room:state` remains the authoritative snapshot. |
+| 16 | Card-ID boundaries | Players mark a card ID as Never with "Never this card" during play. The Boundaries panel (lobby and Settings) lists those cards and the never-genres, and can undo them. | Avoids showing every card title up front. |
+| 17 | Rate-limit identity | An opaque random `nc_client` cookie, stored only as HMAC-SHA256 with `SESSION_HASH_SECRET`. No IP is used. Clearing cookies bypasses it. | Hard Rule 2 forbids IPs; §7.4 calls it a speed bump. |
+| 18 | WS handshake rejection | Socket.IO middleware rejects with `connect_error` `UNAUTHORIZED` (`data.status = 401`) instead of a raw HTTP 401. | That is how Socket.IO surfaces handshake auth failures. |
+| 19 | CSP styles | `style-src 'self' 'unsafe-inline'`. Scripts stay `'self'` only. | Framer Motion animates through inline `style` attributes. |
+| 20 | Panic decoy | Triggers: double tap on the logo, a shake (DeviceMotion), or the Hide button. Shows a working calculator, titles the tab "Calculator" and pauses the game. Hold the display about 1 s (or press Esc) to return. | FR-28. |
+| 21 | Sound | Synthesised with Web Audio (no audio files). Off by default. Ambient pad is a separate toggle. | §8.5, no external assets. |
+| 22 | Room state | Authoritative state is in memory per process with a per-room promise lock, written through to Postgres after every mutation and reloaded lazily after a restart. The Redis adapter is behind `FEATURE_REDIS_ADAPTER=1`. Multiple instances would also need shared room locks, so keep one instance in v1. | §9 single instance acceptable, "Redis adapter ready". |
+| 23 | Away handling | After a 2-minute disconnect the player is marked away. If the lobby option "Pause if someone drops out" (default on) is set, the game pauses. | §7.6 "per the host's choice". |
+| 24 | Metrics | Daily aggregate counters in `metrics_counters` (sessions_created, rooms_started, cards_completed:<genre>, stop_used, reconnects). No identifiers. | §13. |
+| 25 | Contact address | Footer uses `VITE_CONTACT_EMAIL` at build time (placeholder `contact@example.com`). **Owner action:** set a monitored address. | §10.7. |
+| 26 | DB pool size | `DATABASE_POOL_MAX` (default 10). | Tuning on small Render plans; local verification used a single-connection test server. |
