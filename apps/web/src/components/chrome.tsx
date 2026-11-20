@@ -6,7 +6,7 @@ import { useReduced } from '../lib/motion';
 import { exitPanic, triggerPanic, useDoubleTap } from '../lib/panic';
 import { useApp } from '../store';
 
-const CONTACT = import.meta.env.VITE_CONTACT_EMAIL ?? 'contact@example.com';
+const CONTACT = import.meta.env.VITE_CONTACT_EMAIL ?? 'vers.nude.22@gmail.com';
 
 /** Slow embers; capped count, disabled for reduced motion (Section 8.2). */
 export function Background() {
