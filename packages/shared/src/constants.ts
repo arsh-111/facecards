@@ -54,3 +54,9 @@ export const MIN_AGE = 18;
 
 /** Section 7.6: reconnect window before a player is marked away. */
 export const RECONNECT_GRACE_MS = 2 * 60 * 1000;
+
+/** A player counts as connected if their device polled within this window. */
+export const ONLINE_WINDOW_MS = 20 * 1000;
+
+/** Client polling cadence (ms). Faster during play so flips and Stop propagate within ~1 s. */
+export const POLL_MS = { playing: 1000, lobby: 2500, background: 5000 } as const;

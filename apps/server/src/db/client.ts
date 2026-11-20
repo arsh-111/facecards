@@ -21,7 +21,10 @@ export async function openDatabase(opts: {
   ssl?: boolean;
   poolMax?: number;
   pgliteDir: string | null;
+  /** Apply /drizzle migrations on open (default true). Serverless instances skip it: the build migrates. */
+  migrate?: boolean;
 }): Promise<Database> {
+  const runMigrations = opts.migrate !== false;
   if (opts.databaseUrl) {
     const { default: pg } = await import('pg');
     const { drizzle } = await import('drizzle-orm/node-postgres');
@@ -32,7 +35,7 @@ export async function openDatabase(opts: {
       ssl: opts.ssl ? { rejectUnauthorized: false } : undefined,
     });
     const db = drizzle(pool, { schema });
-    await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+    if (runMigrations) await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
     return { db: db as unknown as DB, driver: 'pg', close: () => pool.end() };
   }
 
@@ -42,6 +45,6 @@ export async function openDatabase(opts: {
   if (opts.pgliteDir) mkdirSync(opts.pgliteDir, { recursive: true });
   const client = opts.pgliteDir ? new PGlite(opts.pgliteDir) : new PGlite();
   const db = drizzle(client, { schema });
-  await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+  if (runMigrations) await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
   return { db: db as unknown as DB, driver: 'pglite', close: () => client.close() };
 }

@@ -6,8 +6,6 @@ export interface Config {
   databaseSsl: boolean;
   databasePoolMax: number;
   pgliteDir: string | null;
-  redisUrl: string | null;
-  redisAdapter: boolean;
   hashSecret: string;
   allowedOrigins: string[];
   idleMs: number;
@@ -27,7 +25,8 @@ function num(v: string | undefined, def: number): number {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const nodeEnv = env.NODE_ENV ?? 'development';
-  const isProd = nodeEnv === 'production';
+  // Every Vercel deployment (production or preview) is served over HTTPS: run hardened.
+  const isProd = nodeEnv === 'production' || !!env.VERCEL;
   const databaseUrl = env.DATABASE_URL?.trim() || null;
   if (isProd && !databaseUrl) throw new Error('DATABASE_URL is required in production');
 
@@ -40,6 +39,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     .split(',')
     .map((s) => s.trim().replace(/\/$/, ''))
     .filter(Boolean);
+  // Vercel system env vars: the production domain, this deployment's URL and the branch URL.
+  for (const host of [env.VERCEL_PROJECT_PRODUCTION_URL, env.VERCEL_URL, env.VERCEL_BRANCH_URL]) {
+    if (host) origins.push(`https://${host}`);
+  }
   if (!isProd) {
     origins.push('http://localhost:5173', 'http://127.0.0.1:5173');
     const port = env.PORT ?? '3000';
@@ -55,10 +58,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: num(env.PORT, 3000),
     databaseUrl,
     databaseSsl: env.DATABASE_SSL === '1',
-    databasePoolMax: num(env.DATABASE_POOL_MAX, 10),
+    // Serverless instances each hold their own pool, so keep it small there.
+    databasePoolMax: num(env.DATABASE_POOL_MAX, env.VERCEL ? 3 : 10),
     pgliteDir: nodeEnv === 'test' ? null : (env.PGLITE_DIR ?? '.data/pglite'),
-    redisUrl: env.REDIS_URL?.trim() || null,
-    redisAdapter: env.FEATURE_REDIS_ADAPTER === '1',
     hashSecret: hashSecret || 'dev-only-insecure-secret-change-me-0000',
     allowedOrigins: [...new Set(origins)],
     idleMs: num(env.SESSION_IDLE_HOURS, 3) * HOUR,

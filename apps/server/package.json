@@ -15,17 +15,12 @@
     "@fastify/helmet": "^13.2.0",
     "@fastify/static": "^8.3.0",
     "@nc/shared": "*",
-    "@socket.io/redis-adapter": "^8.3.0",
-    "cookie": "^1.1.1",
     "drizzle-orm": "^0.45.4",
     "fastify": "^5.12.8",
-    "pg": "^8.23.1",
-    "redis": "^6.3.1",
-    "socket.io": "^4.8.4"
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",
-    "socket.io-client": "^4.8.4",
     "tsup": "^9.0.0",
     "tsx": "^4.23.15"
   }

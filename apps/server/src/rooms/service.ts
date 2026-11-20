@@ -1,17 +1,18 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { and, desc, eq, inArray, isNull, lt, ne, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, notInArray, sql } from 'drizzle-orm';
 import {
+  ActionSchemas,
   DEFAULT_BOUNDARIES,
   DEFAULT_SETTINGS,
   generateRoomCode,
+  ONLINE_WINDOW_MS,
   RECONNECT_GRACE_MS,
-  WsSchemas,
   type Genre,
   type Intensity,
+  type RoomAction,
   type RoomMode,
   type RoomSnapshot,
   type TurnMode,
-  type WsEvent,
 } from '@nc/shared';
 import type { DB } from '../db/client';
 import { roomDeckState, roomPlayers, rooms, sessions, type LocalProfile } from '../db/schema';
@@ -22,37 +23,57 @@ import type { SessionRow } from '../sessions';
 import * as E from './engine';
 import { EngineError, type Room, type SessionInfo } from './engine';
 
-export interface RoomEvent {
-  type: 'card:dealt' | 'game:stopped' | 'room:playerJoined' | 'room:playerLeft' | 'room:kicked';
-  payload: Record<string, unknown>;
-}
+/**
+ * Stateless room service (works on serverless hosts such as Vercel).
+ *
+ * Postgres is the only source of truth. Every mutation runs in one transaction that locks the
+ * room row (`SELECT … FOR UPDATE`), so actions on a room are applied one at a time even across
+ * many server instances (Section 7.6 single-writer). Idempotency keys live in the room row.
+ */
 
-interface CachedSession extends SessionInfo {
-  createdAt: number;
-  lastSeenAt: number;
-  expiresAt: number;
-}
+const RECENT_ACTIONS = 100;
+/** Presence writes are throttled to one per player per this interval. */
+const PRESENCE_WRITE_MS = 5000;
+const cryptoRng = () => randomInt(0, 2 ** 32) / 2 ** 32;
 
-const RECENT_ACTIONS = 200;
+type Where = { id: string } | { code: string };
+
+interface Loaded {
+  room: Room;
+  sessions: Map<string, SessionInfo>;
+}
 
 function endIfLive(r: Room, ctx: E.EngineCtx): void {
   if (r.state === 'playing' || r.state === 'paused' || r.state === 'stopped') E.end(r, ctx);
 }
-const cryptoRng = () => randomInt(0, 2 ** 32) / 2 ** 32;
+
+function toSessionInfo(row: SessionRow): SessionInfo {
+  return {
+    displayName: row.displayName,
+    gender: row.gender as SessionInfo['gender'],
+    preference: row.preference as SessionInfo['preference'],
+    genres: row.genres as Genre[],
+    boundaries: { ...DEFAULT_BOUNDARIES, ...row.boundaries },
+    seenNote: { ...DEFAULT_SETTINGS, ...row.settings }.seenNote,
+  };
+}
+
+/** Derive connected/away flags from the last poll time. Local (same-device) players are present. */
+function derivePresence(room: Room, now: number): void {
+  for (const p of room.players) {
+    if (p.local) {
+      p.connected = true;
+      p.away = false;
+      continue;
+    }
+    const seen = p.lastSeenAt ?? p.joinedAt;
+    p.connected = now - seen < ONLINE_WINDOW_MS;
+    p.away = now - seen > RECONNECT_GRACE_MS;
+    p.disconnectedAt = p.connected ? null : seen;
+  }
+}
 
 export class RoomService {
-  private rooms = new Map<string, Room>();
-  private codes = new Map<string, string>();
-  private locks = new Map<string, Promise<unknown>>();
-  private sessionsCache = new Map<string, CachedSession>();
-  private recent = new Map<string, string[]>();
-  private awayTimers = new Map<string, NodeJS.Timeout>();
-
-  /** Set by the realtime layer: broadcast a fresh snapshot (and optional event) for a room. */
-  onChange: (room: Room, events: RoomEvent[]) => void = () => {};
-  /** Set by the realtime layer: room hard-deleted. */
-  onClosed: (roomId: string) => void = () => {};
-
   constructor(
     private readonly db: DB,
     private readonly cards: CardStore,
@@ -61,169 +82,30 @@ export class RoomService {
     private readonly rng: () => number = cryptoRng,
   ) {}
 
-  /* --------------------------------------------------------- session cache */
-
-  cacheSession(row: SessionRow): void {
-    this.sessionsCache.set(row.id, {
-      displayName: row.displayName,
-      gender: row.gender as SessionInfo['gender'],
-      preference: row.preference as SessionInfo['preference'],
-      genres: row.genres as Genre[],
-      boundaries: { ...DEFAULT_BOUNDARIES, ...row.boundaries },
-      seenNote: ({ ...DEFAULT_SETTINGS, ...row.settings }).seenNote,
-      createdAt: row.createdAt.getTime(),
-      lastSeenAt: row.lastSeenAt.getTime(),
-      expiresAt: row.expiresAt.getTime(),
-    });
+  private ctx(sessionsById: Map<string, SessionInfo>, now = Date.now()): E.EngineCtx {
+    return { cards: this.cards, session: (id) => sessionsById.get(id), rng: this.rng, now };
   }
 
-  /** Cheap in-memory check used before sending card content to a socket. */
-  isSessionLive(sessionId: string, now = Date.now()): boolean {
-    const s = this.sessionsCache.get(sessionId);
-    if (!s) return false;
-    return (
-      now < s.expiresAt &&
-      now - s.createdAt < this.cfg.absoluteMs &&
-      now - s.lastSeenAt < this.cfg.idleMs
-    );
-  }
+  /* ------------------------------------------------------------ loading */
 
-  private ctx(): E.EngineCtx {
-    return {
-      cards: this.cards,
-      session: (id) => this.sessionsCache.get(id),
-      rng: this.rng,
-      now: Date.now(),
-    };
-  }
-
-  snapshotFor(room: Room, sessionId: string | null): RoomSnapshot {
-    return E.snapshot(room, this.ctx(), sessionId);
-  }
-
-  /** Called after a profile edit so lobbies reflect new names/genres/boundaries. */
-  async profileChanged(row: SessionRow): Promise<void> {
-    this.cacheSession(row);
-    for (const room of this.rooms.values()) {
-      if (!room.players.some((p) => p.sessionId === row.id && p.leftAt === null)) continue;
-      await this.withRoom(room.id, (r) => {
-        if (r.state === 'lobby') E.syncGenres(r, this.ctx());
-      });
-    }
-  }
-
-  /* ------------------------------------------------------------- locking */
-
-  /** Single-writer per room (Section 7.6): mutations run strictly one after another. */
-  private async withRoom<T>(
-    roomId: string,
-    fn: (room: Room) => T | Promise<T>,
-    events: RoomEvent[] = [],
-  ): Promise<T> {
-    const prev = this.locks.get(roomId) ?? Promise.resolve();
-    let release!: () => void;
-    const next = new Promise<void>((r) => (release = r));
-    const chained = prev.then(() => next);
-    this.locks.set(roomId, chained);
-    await prev;
-    try {
-      const room = this.rooms.get(roomId);
-      if (!room) throw new EngineError('NOT_FOUND');
-      const result = await fn(room);
-      room.lastActivityAt = Date.now();
-      await this.persist(room);
-      this.onChange(room, events);
-      return result;
-    } finally {
-      release();
-      if (this.locks.get(roomId) === chained) this.locks.delete(roomId);
-    }
-  }
-
-  /* ---------------------------------------------------------- persistence */
-
-  private async persist(room: Room): Promise<void> {
-    const host = E.hostPlayer(room);
-    await this.db.transaction(async (tx) => {
-      const values = {
-        id: room.id,
-        code: room.code,
-        hostSessionId: host?.sessionId ?? null,
-        mode: room.mode,
-        track: room.track,
-        genres: room.genres,
-        intensity: room.intensity,
-        turnMode: room.turnMode,
-        state: room.state,
-        runtime: { ...room.runtime, genresTouched: room.genresTouched } as typeof room.runtime,
-        createdAt: new Date(room.createdAt),
-        lastActivityAt: new Date(room.lastActivityAt),
-      };
-      await tx
-        .insert(rooms)
-        .values(values)
-        .onConflictDoUpdate({ target: rooms.id, set: { ...values, id: undefined } });
-      const ids = room.players.map((p) => p.id);
-      if (ids.length) {
-        await tx
-          .delete(roomPlayers)
-          .where(and(eq(roomPlayers.roomId, room.id), notInArray(roomPlayers.id, ids)));
-      } else {
-        await tx.delete(roomPlayers).where(eq(roomPlayers.roomId, room.id));
-      }
-      for (const p of room.players) {
-        const pv = {
-          id: p.id,
-          roomId: room.id,
-          sessionId: p.sessionId,
-          localProfile: p.local,
-          rolePrefs: p.rolePrefs,
-          joinedAt: new Date(p.joinedAt),
-          leftAt: p.leftAt === null ? null : new Date(p.leftAt),
-        };
-        await tx
-          .insert(roomPlayers)
-          .values(pv)
-          .onConflictDoUpdate({ target: roomPlayers.id, set: { ...pv, id: undefined } });
-      }
-      await tx.delete(roomDeckState).where(eq(roomDeckState.roomId, room.id));
-      if (room.deck.length) {
-        await tx.insert(roomDeckState).values(
-          room.deck.map((d) => ({
-            roomId: room.id,
-            cardId: d.cardId,
-            status: d.status,
-            position: d.position,
-            assignedRoles: d.assignedRoles,
-            startedAt: d.startedAt === null ? null : new Date(d.startedAt),
-            completedAt: d.completedAt === null ? null : new Date(d.completedAt),
-          })),
-        );
-      }
-    });
-  }
-
-  /** Rehydrate a room from Postgres (e.g. after a restart). */
-  private async load(where: { id?: string; code?: string }): Promise<Room | null> {
-    const cachedId = where.id ?? (where.code ? this.codes.get(where.code) : undefined);
-    if (cachedId && this.rooms.has(cachedId)) return this.rooms.get(cachedId) as Room;
-    const [row] = await this.db
-      .select()
-      .from(rooms)
-      .where(where.id ? eq(rooms.id, where.id) : eq(rooms.code, where.code as string))
-      .limit(1);
+  private async load(ex: DB, where: Where, lock: boolean): Promise<Loaded | null> {
+    const cond = 'id' in where ? eq(rooms.id, where.id) : eq(rooms.code, where.code);
+    const base = ex.select().from(rooms).where(cond).limit(1);
+    const [row] = lock ? await base.for('update') : await base;
     if (!row) return null;
-    if (Date.now() - row.lastActivityAt.getTime() > this.cfg.roomIdleMs) return null;
-    const players = await this.db.select().from(roomPlayers).where(eq(roomPlayers.roomId, row.id));
-    const deck = await this.db.select().from(roomDeckState).where(eq(roomDeckState.roomId, row.id));
+    const now = Date.now();
+    if (now - row.lastActivityAt.getTime() > this.cfg.roomIdleMs) return null; // expired (FR-24)
+
+    const players = await ex.select().from(roomPlayers).where(eq(roomPlayers.roomId, row.id));
+    const deck = await ex.select().from(roomDeckState).where(eq(roomDeckState.roomId, row.id));
     const sessionIds = players.flatMap((p) => (p.sessionId ? [p.sessionId] : []));
+    const sessionsById = new Map<string, SessionInfo>();
     if (sessionIds.length) {
-      const srows = await this.db.select().from(sessions).where(inArray(sessions.id, sessionIds));
-      srows.forEach((s) => this.cacheSession(s));
+      const srows = await ex.select().from(sessions).where(inArray(sessions.id, sessionIds));
+      for (const s of srows) sessionsById.set(s.id, toSessionInfo(s));
     }
-    const { genresTouched, ...runtime } = row.runtime as typeof row.runtime & {
-      genresTouched?: boolean;
-    };
+
+    const { genresTouched, ...runtime } = row.runtime;
     const room: Room = {
       id: row.id,
       code: row.code,
@@ -245,62 +127,165 @@ export class RoomService {
         rolePrefs: p.rolePrefs,
         joinedAt: p.joinedAt.getTime(),
         leftAt: p.leftAt ? p.leftAt.getTime() : null,
+        lastSeenAt: p.lastSeenAt ? p.lastSeenAt.getTime() : null,
+        activeTab: p.activeTab,
         connected: false,
         disconnectedAt: null,
         away: false,
       })),
-      deck: deck.map((d) => ({
-        cardId: d.cardId,
-        status: d.status as E.DeckEntry['status'],
-        position: d.position,
-        assignedRoles: d.assignedRoles,
-        startedAt: d.startedAt ? d.startedAt.getTime() : null,
-        completedAt: d.completedAt ? d.completedAt.getTime() : null,
-      })),
+      deck: deck
+        .map((d) => ({
+          cardId: d.cardId,
+          status: d.status as E.DeckEntry['status'],
+          position: d.position,
+          assignedRoles: d.assignedRoles,
+          startedAt: d.startedAt ? d.startedAt.getTime() : null,
+          completedAt: d.completedAt ? d.completedAt.getTime() : null,
+        }))
+        // Cards removed from the card file since the deck was built are dropped.
+        .filter((d) => this.cards.byId.has(d.cardId)),
     };
-    // Drop cards that no longer exist in the card file.
-    room.deck = room.deck.filter((d) => this.cards.byId.has(d.cardId));
-    if (room.runtime.active && !this.cards.byId.has(room.runtime.active.cardId)) {
+    // Normalise after deletions elsewhere (expired sessions, edited card file).
+    const ids = new Set(room.players.map((p) => p.id));
+    const a = room.runtime.active;
+    if (a && (!this.cards.byId.has(a.cardId) || Object.values(a.assignment).some((pid) => !ids.has(pid)))) {
+      const entry = room.deck.find((d) => d.cardId === a.cardId);
+      if (entry) entry.status = 'unseen';
       room.runtime.active = null;
     }
-    if (!room.hostPlayerId) room.hostPlayerId = E.activePlayers(room).find((p) => p.sessionId)?.id ?? null;
-    this.rooms.set(room.id, room);
-    this.codes.set(room.code, room.id);
-    return room;
+    if (!room.hostPlayerId) {
+      room.hostPlayerId = E.activePlayers(room).find((p) => p.sessionId)?.id ?? null;
+    }
+    derivePresence(room, now);
+    return { room, sessions: sessionsById };
   }
 
-  async getByCode(code: string): Promise<Room | null> {
-    return this.load({ code });
+  /* -------------------------------------------------------- persistence */
+
+  private async persist(tx: DB, room: Room): Promise<void> {
+    const host = E.hostPlayer(room);
+    const values = {
+      id: room.id,
+      code: room.code,
+      hostSessionId: host?.sessionId ?? null,
+      mode: room.mode,
+      track: room.track,
+      genres: room.genres,
+      intensity: room.intensity,
+      turnMode: room.turnMode,
+      state: room.state,
+      runtime: { ...room.runtime, genresTouched: room.genresTouched },
+      createdAt: new Date(room.createdAt),
+      lastActivityAt: new Date(room.lastActivityAt),
+    };
+    await tx
+      .insert(rooms)
+      .values(values)
+      .onConflictDoUpdate({ target: rooms.id, set: { ...values, id: undefined } });
+
+    const ids = room.players.map((p) => p.id);
+    await tx
+      .delete(roomPlayers)
+      .where(
+        ids.length
+          ? and(eq(roomPlayers.roomId, room.id), notInArray(roomPlayers.id, ids))
+          : eq(roomPlayers.roomId, room.id),
+      );
+    for (const p of room.players) {
+      const pv = {
+        id: p.id,
+        roomId: room.id,
+        sessionId: p.sessionId,
+        localProfile: p.local,
+        rolePrefs: p.rolePrefs,
+        joinedAt: new Date(p.joinedAt),
+        leftAt: p.leftAt === null ? null : new Date(p.leftAt),
+        lastSeenAt: p.lastSeenAt ? new Date(p.lastSeenAt) : null,
+        activeTab: p.activeTab ?? null,
+      };
+      await tx
+        .insert(roomPlayers)
+        .values(pv)
+        .onConflictDoUpdate({ target: roomPlayers.id, set: { ...pv, id: undefined } });
+    }
+
+    await tx.delete(roomDeckState).where(eq(roomDeckState.roomId, room.id));
+    if (room.deck.length) {
+      await tx.insert(roomDeckState).values(
+        room.deck.map((d) => ({
+          roomId: room.id,
+          cardId: d.cardId,
+          status: d.status,
+          position: d.position,
+          assignedRoles: d.assignedRoles,
+          startedAt: d.startedAt === null ? null : new Date(d.startedAt),
+          completedAt: d.completedAt === null ? null : new Date(d.completedAt),
+        })),
+      );
+    }
   }
 
-  async getById(id: string): Promise<Room | null> {
-    return this.load({ id });
+  /**
+   * Run `fn` on a locked room inside one transaction and save the result (unless it returns
+   * `{ save: false }`). Single writer per room across all instances.
+   */
+  private async withRoom<T>(
+    where: Where,
+    fn: (room: Room, ctx: E.EngineCtx, tx: DB, sessions: Map<string, SessionInfo>) => T | Promise<T>,
+  ): Promise<{ room: Room; sessions: Map<string, SessionInfo>; result: T }> {
+    return this.db.transaction(async (raw) => {
+      const tx = raw as unknown as DB;
+      const loaded = await this.load(tx, where, true);
+      if (!loaded) throw new EngineError('NOT_FOUND');
+      const { room } = loaded;
+      const ctx = this.ctx(loaded.sessions);
+      const result = await fn(room, ctx, tx, loaded.sessions);
+      if ((result as { save?: boolean } | undefined)?.save !== false) {
+        room.lastActivityAt = Date.now();
+        room.runtime.version = (room.runtime.version ?? 0) + 1;
+        await this.persist(tx, room);
+      }
+      return { room, sessions: loaded.sessions, result };
+    });
   }
 
-  isMember(room: Room, sessionId: string): boolean {
-    return room.players.some((p) => p.sessionId === sessionId && p.leftAt === null);
+  snapshotOf(room: Room, sessionsById: Map<string, SessionInfo>, viewerSessionId: string): RoomSnapshot {
+    return E.snapshot(room, this.ctx(sessionsById), viewerSessionId);
   }
+
+  /* -------------------------------------------------------------- queries */
 
   /** FR-4: the most recent room this session is still in. */
   async currentRoomCode(sessionId: string): Promise<string | null> {
     const rows = await this.db
-      .select({ code: rooms.code, lastActivityAt: rooms.lastActivityAt })
+      .select({ code: rooms.code })
       .from(roomPlayers)
       .innerJoin(rooms, eq(rooms.id, roomPlayers.roomId))
       .where(
-        and(eq(roomPlayers.sessionId, sessionId), isNull(roomPlayers.leftAt), ne(rooms.state, 'ended')),
+        and(
+          eq(roomPlayers.sessionId, sessionId),
+          isNull(roomPlayers.leftAt),
+          ne(rooms.state, 'ended'),
+          sql`${rooms.lastActivityAt} > ${new Date(Date.now() - this.cfg.roomIdleMs)}`,
+        ),
       )
       .orderBy(desc(rooms.lastActivityAt))
       .limit(1);
     return rows[0]?.code ?? null;
   }
 
-  /* -------------------------------------------------------------- create */
+  private memberOrThrow(room: Room, sessionId: string): E.Player {
+    const me = E.activePlayers(room).find((p) => p.sessionId === sessionId);
+    if (me) return me;
+    if (room.runtime.kickedSessions.includes(sessionId)) throw new EngineError('KICKED');
+    throw new EngineError('NOT_MEMBER');
+  }
+
+  /* ------------------------------------------------------------ lifecycle */
 
   private async uniqueCode(): Promise<string> {
     for (let i = 0; i < 20; i++) {
       const code = generateRoomCode((n) => randomInt(0, n));
-      if (this.codes.has(code)) continue;
       const [hit] = await this.db.select({ id: rooms.id }).from(rooms).where(eq(rooms.code, code)).limit(1);
       if (!hit) return code;
     }
@@ -308,9 +293,8 @@ export class RoomService {
   }
 
   async create(session: SessionRow, mode: RoomMode, solo = false): Promise<Room> {
-    this.cacheSession(session);
     const now = Date.now();
-    const hostPlayer = E.newPlayer(randomUUID(), session.id, now);
+    const hostPlayer = { ...E.newPlayer(randomUUID(), session.id, now), lastSeenAt: now };
     const room: Room = {
       id: randomUUID(),
       code: await this.uniqueCode(),
@@ -322,7 +306,7 @@ export class RoomService {
       intensity: null,
       turnMode: 'alternate',
       state: 'lobby',
-      runtime: E.newRuntime(),
+      runtime: { ...E.newRuntime(), version: 1 },
       createdAt: now,
       lastActivityAt: now,
       players: [hostPlayer],
@@ -339,320 +323,273 @@ export class RoomService {
         connected: true,
       });
     }
-    E.syncGenres(room, this.ctx());
-    this.rooms.set(room.id, room);
-    this.codes.set(room.code, room.id);
-    await this.persist(room);
+    const sessionsById = new Map([[session.id, toSessionInfo(session)]]);
+    E.syncGenres(room, this.ctx(sessionsById, now));
+    await this.db.transaction(async (tx) => this.persist(tx as unknown as DB, room));
     return room;
   }
 
   async join(code: string, session: SessionRow): Promise<Room> {
-    this.cacheSession(session);
-    const room = await this.getByCode(code);
-    if (!room || room.state === 'ended' && !this.isMember(room, session.id)) {
-      throw new EngineError('NOT_FOUND');
-    }
-    const wasMember = this.isMember(room, session.id);
-    let playerId = '';
-    await this.withRoom(
-      room.id,
-      (r) => {
-        playerId = E.join(r, this.ctx(), session.id, randomUUID()).id;
-      },
-      wasMember ? [] : [{ type: 'room:playerJoined', payload: {} }],
-    );
-    void playerId;
+    const { room } = await this.withRoom({ code }, (r, ctx, _tx, sessionsById) => {
+      if (r.state === 'ended' && !r.players.some((p) => p.sessionId === session.id && p.leftAt === null)) {
+        throw new EngineError('NOT_FOUND');
+      }
+      // The room was loaded before this player joined, so add their profile for genre/track math.
+      sessionsById.set(session.id, toSessionInfo(session));
+      const p = E.join(r, ctx, session.id, randomUUID());
+      p.lastSeenAt = Date.now();
+    });
     return room;
   }
 
-  async leave(room: Room, sessionId: string): Promise<void> {
-    const player = room.players.find((p) => p.sessionId === sessionId && p.leftAt === null);
-    if (!player) return;
-    let keep = true;
-    await this.withRoom(
-      room.id,
-      (r) => {
-        keep = E.removePlayer(r, this.ctx(), player.id);
-        if (!keep) endIfLive(r, this.ctx());
-      },
-      [{ type: 'room:playerLeft', payload: { playerId: player.id } }],
-    );
-    if (!keep) await this.deleteRoom(room.id);
+  /**
+   * Make this browser tab the active one for the player (Section 7.5 multi-tab rule) and return
+   * the snapshot. Earlier tabs get SUPERSEDED on their next poll or action.
+   */
+  async connect(code: string, session: SessionRow, tabId: string): Promise<RoomSnapshot> {
+    const { room, sessions: s } = await this.withRoom({ code }, (r, ctx) => {
+      const me = this.memberOrThrow(r, session.id);
+      const returning = me.away;
+      me.activeTab = tabId;
+      me.lastSeenAt = Date.now();
+      derivePresence(r, Date.now());
+      E.applyPresence(r, ctx);
+      if (returning) void this.metrics.inc('reconnects');
+    });
+    return this.snapshotOf(room, s, session.id);
   }
 
-  /** Remove every trace of a session from rooms before the session row is deleted. */
+  /** Poll: authoritative snapshot for this player, refreshing their presence (throttled). */
+  async poll(code: string, session: SessionRow, tabId: string): Promise<RoomSnapshot> {
+    const loaded = await this.load(this.db, { code }, false);
+    if (!loaded) throw new EngineError('NOT_FOUND');
+    let { room } = loaded;
+    let s = loaded.sessions;
+    const me = this.memberOrThrow(room, session.id);
+    if (me.activeTab && me.activeTab !== tabId) throw new EngineError('SUPERSEDED');
+
+    const now = Date.now();
+    if (!me.lastSeenAt || now - me.lastSeenAt > PRESENCE_WRITE_MS) {
+      await this.db
+        .update(roomPlayers)
+        .set({ lastSeenAt: new Date(now) })
+        .where(eq(roomPlayers.id, me.id));
+      me.lastSeenAt = now;
+      derivePresence(room, now);
+    }
+    // Someone went away or came back: apply it once, under the room lock.
+    const handled = new Set(room.runtime.awayHandled ?? []);
+    if (E.activePlayers(room).some((p) => p.away !== handled.has(p.id))) {
+      ({ room, sessions: s } = await this.withRoom({ id: room.id }, (r, ctx) =>
+        E.applyPresence(r, ctx) ? undefined : { save: false },
+      ));
+    }
+    return this.snapshotOf(room, s, session.id);
+  }
+
+  async leave(code: string, sessionId: string): Promise<void> {
+    let remove = false;
+    try {
+      await this.withRoom({ code }, (r, ctx) => {
+        const p = r.players.find((pl) => pl.sessionId === sessionId && pl.leftAt === null);
+        if (!p) return { save: false };
+        remove = !E.removePlayer(r, ctx, p.id);
+        if (remove) endIfLive(r, ctx);
+        return undefined;
+      });
+    } catch (e) {
+      if (e instanceof EngineError && e.code === 'NOT_FOUND') return;
+      throw e;
+    }
+    if (remove) await this.deleteRoomByCode(code);
+  }
+
+  /** Delete-now: remove every trace of a session from its rooms before the session row goes. */
   async purgeSession(sessionId: string): Promise<void> {
-    this.sessionsCache.delete(sessionId);
     const memberRooms = await this.db
       .select({ roomId: roomPlayers.roomId })
       .from(roomPlayers)
       .where(eq(roomPlayers.sessionId, sessionId));
-    for (const { roomId } of memberRooms) await this.load({ id: roomId });
-    for (const room of [...this.rooms.values()]) {
-      if (!room.players.some((p) => p.sessionId === sessionId)) continue;
-      let keep = true;
-      await this.withRoom(room.id, (r) => {
-        const p = r.players.find((pl) => pl.sessionId === sessionId);
-        if (p) keep = E.removePlayer(r, this.ctx(), p.id);
-        r.players = r.players.filter((pl) => pl.sessionId !== sessionId);
-        r.runtime.kickedSessions = r.runtime.kickedSessions.filter((s) => s !== sessionId);
-        if (!keep) endIfLive(r, this.ctx());
-      }, [{ type: 'room:playerLeft', payload: {} }]);
-      if (!keep) await this.deleteRoom(room.id);
+    for (const { roomId } of memberRooms) {
+      let remove = false;
+      try {
+        await this.withRoom({ id: roomId }, (r, ctx) => {
+          const p = r.players.find((pl) => pl.sessionId === sessionId);
+          if (p && p.leftAt === null) remove = !E.removePlayer(r, ctx, p.id);
+          else remove = !E.activePlayers(r).some((pl) => pl.sessionId && pl.sessionId !== sessionId);
+          r.players = r.players.filter((pl) => pl.sessionId !== sessionId);
+          r.runtime.kickedSessions = r.runtime.kickedSessions.filter((x) => x !== sessionId);
+          if (remove) endIfLive(r, ctx);
+        });
+      } catch (e) {
+        if (!(e instanceof EngineError && e.code === 'NOT_FOUND')) throw e;
+      }
+      if (remove) await this.deleteRoom(roomId);
+    }
+  }
+
+  /** Lobby views reflect profile edits (names, genres, boundaries). */
+  async profileChanged(row: SessionRow): Promise<void> {
+    const memberRooms = await this.db
+      .select({ roomId: roomPlayers.roomId })
+      .from(roomPlayers)
+      .innerJoin(rooms, eq(rooms.id, roomPlayers.roomId))
+      .where(and(eq(roomPlayers.sessionId, row.id), isNull(roomPlayers.leftAt), eq(rooms.state, 'lobby')));
+    for (const { roomId } of memberRooms) {
+      await this.withRoom({ id: roomId }, (r, ctx) => E.syncGenres(r, ctx)).catch(() => {});
     }
   }
 
   async deleteRoom(roomId: string): Promise<void> {
     await this.db.delete(rooms).where(eq(rooms.id, roomId));
-    const room = this.rooms.get(roomId);
-    if (room) {
-      this.codes.delete(room.code);
-      for (const p of room.players) this.clearAway(room.id, p.id);
-    }
-    this.rooms.delete(roomId);
-    this.recent.delete(roomId);
-    this.onClosed(roomId);
   }
 
-  /** FR-24 + cleanup job: hard-delete idle rooms and rooms with no human players. */
+  private async deleteRoomByCode(code: string): Promise<void> {
+    await this.db.delete(rooms).where(eq(rooms.code, code));
+  }
+
+  /** FR-24 + cleanup: hard-delete idle rooms and rooms with no human players left. */
   async deleteExpiredRooms(now = Date.now()): Promise<number> {
-    const cutoff = new Date(now - this.cfg.roomIdleMs);
-    const idle = await this.db.select({ id: rooms.id }).from(rooms).where(lt(rooms.lastActivityAt, cutoff));
-    const orphan = await this.db
-      .select({ id: rooms.id })
-      .from(rooms)
+    const deleted = await this.db
+      .delete(rooms)
       .where(
-        sql`NOT EXISTS (SELECT 1 FROM ${roomPlayers} rp WHERE rp.room_id = ${rooms.id} AND rp.session_id IS NOT NULL AND rp.left_at IS NULL)`,
-      );
-    const ids = [...new Set([...idle, ...orphan].map((r) => r.id))];
-    for (const id of ids) await this.deleteRoom(id);
-    return ids.length;
-  }
-
-  /** Sessions deleted by the cleanup job: drop them from cached rooms. */
-  async sessionsExpired(ids: string[]): Promise<void> {
-    if (ids.length === 0) return;
-    const gone = new Set(ids);
-    ids.forEach((id) => this.sessionsCache.delete(id));
-    for (const room of [...this.rooms.values()]) {
-      if (!room.players.some((p) => p.sessionId && gone.has(p.sessionId))) continue;
-      let keep = true;
-      // Remove all expired players in one pass so host never passes to another expired session.
-      await this.withRoom(room.id, (r) => {
-        r.players = r.players.filter((pl) => {
-          if (!pl.sessionId || !gone.has(pl.sessionId)) return true;
-          if (pl.leftAt === null) pl.leftAt = Date.now();
-          return false;
-        });
-        r.runtime.kickedSessions = r.runtime.kickedSessions.filter((s) => !gone.has(s));
-        const remaining = E.activePlayers(r);
-        if (!r.players.some((pl) => pl.id === r.hostPlayerId)) {
-          r.hostPlayerId = remaining.find((pl) => pl.sessionId)?.id ?? null;
-        }
-        keep = remaining.some((pl) => pl.sessionId);
-        if (!keep) endIfLive(r, this.ctx());
-        if (r.runtime.currentPlayerId && !remaining.some((pl) => pl.id === r.runtime.currentPlayerId)) {
-          r.runtime.currentPlayerId = remaining[0]?.id ?? null;
-        }
-        const a = r.runtime.active;
-        if (a && Object.values(a.assignment).some((pid) => !remaining.some((pl) => pl.id === pid))) {
-          const entry = r.deck.find((d) => d.cardId === a.cardId);
-          if (entry) entry.status = 'unseen';
-          r.runtime.active = null;
-        }
-      });
-      if (!keep) await this.deleteRoom(room.id);
-    }
-  }
-
-  /* ------------------------------------------------------------ presence */
-
-  private awayKey = (roomId: string, playerId: string) => `${roomId}:${playerId}`;
-  private clearAway(roomId: string, playerId: string): void {
-    const k = this.awayKey(roomId, playerId);
-    const t = this.awayTimers.get(k);
-    if (t) clearTimeout(t);
-    this.awayTimers.delete(k);
-  }
-
-  async connected(room: Room, sessionId: string): Promise<void> {
-    const p = room.players.find((pl) => pl.sessionId === sessionId && pl.leftAt === null);
-    if (!p) return;
-    this.clearAway(room.id, p.id);
-    const wasAway = p.away || p.disconnectedAt !== null;
-    await this.withRoom(room.id, (r) => {
-      const pl = r.players.find((x) => x.id === p.id);
-      if (!pl) return;
-      pl.connected = true;
-      pl.away = false;
-      pl.disconnectedAt = null;
-    });
-    if (wasAway) void this.metrics.inc('reconnects');
-  }
-
-  async disconnected(room: Room, sessionId: string, graceMs = RECONNECT_GRACE_MS): Promise<void> {
-    const p = room.players.find((pl) => pl.sessionId === sessionId && pl.leftAt === null);
-    if (!p || !this.rooms.has(room.id)) return;
-    await this.withRoom(room.id, (r) => {
-      const pl = r.players.find((x) => x.id === p.id);
-      if (!pl) return;
-      pl.connected = false;
-      pl.disconnectedAt = Date.now();
-    });
-    this.clearAway(room.id, p.id);
-    const timer = setTimeout(() => {
-      this.awayTimers.delete(this.awayKey(room.id, p.id));
-      if (!this.rooms.has(room.id)) return;
-      void this.withRoom(room.id, (r) => E.markAway(r, this.ctx(), p.id)).catch(() => {});
-    }, graceMs);
-    timer.unref?.();
-    this.awayTimers.set(this.awayKey(room.id, p.id), timer);
+        sql`${rooms.lastActivityAt} < ${new Date(now - this.cfg.roomIdleMs)} OR NOT EXISTS (SELECT 1 FROM ${roomPlayers} rp WHERE rp.room_id = ${rooms.id} AND rp.session_id IS NOT NULL AND rp.left_at IS NULL)`,
+      )
+      .returning({ id: rooms.id });
+    return deleted.length;
   }
 
   /* -------------------------------------------------------------- actions */
 
   /**
-   * Apply one client action. Every mutation is idempotent by `actionId` (Section 7.6) and
-   * serialized per room. Returns the boundaries update for `card:never` so callers can persist.
+   * Apply one client action (idempotent by `actionId`) and return the actor's new snapshot, or
+   * null when the actor is no longer in the room (left).
    */
-  async act(room: Room, session: SessionRow, event: WsEvent, raw: unknown): Promise<void> {
-    const schema = WsSchemas[event];
-    const parsed = schema.safeParse(raw);
+  async act(
+    code: string,
+    session: SessionRow,
+    tabId: string,
+    event: RoomAction,
+    raw: unknown,
+  ): Promise<RoomSnapshot | null> {
+    const parsed = ActionSchemas[event].safeParse(raw);
     if (!parsed.success) throw new EngineError('BAD_REQUEST');
     const payload = parsed.data as Record<string, unknown> & { actionId: string };
-    if (event === 'room:leave') return this.leave(room, session.id);
 
-    const events: RoomEvent[] = [];
-    let neverCardId: string | null = null;
-    let kickedLast = false;
-    await this.withRoom(
-      room.id,
-      (r) => {
-        const seen = this.recent.get(r.id) ?? [];
-        if (seen.includes(payload.actionId)) return; // duplicate delivery: no-op, state re-sent
-        const actor = E.activePlayers(r).find((p) => p.sessionId === session.id);
-        if (!actor) throw new EngineError('NOT_MEMBER');
-        const ctx = this.ctx();
-        const a = actor.id;
-        switch (event) {
-          case 'room:join':
-            break;
-          case 'room:setGenres':
-            E.setGenres(r, ctx, a, payload.genres as Genre[]);
-            break;
-          case 'room:setOptions':
-            E.setOptions(r, a, payload as Parameters<typeof E.setOptions>[2]);
-            break;
-          case 'room:setRolePrefs':
-            E.setRolePrefs(r, a, payload.playerId as string, payload.rolePrefs as never);
-            break;
-          case 'room:proposeTrack':
-            E.proposeTrack(r, ctx, a, payload.track as string);
-            break;
-          case 'room:confirmTrack':
-            E.confirmTrack(r, a);
-            break;
-          case 'room:addLocal':
-            E.addLocal(r, ctx, a, randomUUID(), payload.player as LocalProfile);
-            break;
-          case 'room:updateLocal':
-            E.updateLocal(r, ctx, a, payload.playerId as string, payload.player as LocalProfile);
-            break;
-          case 'room:removeLocal':
-            E.removeLocal(r, ctx, a, payload.playerId as string);
-            break;
-          case 'room:start':
-            E.start(r, ctx, a);
-            void this.metrics.inc('rooms_started');
-            break;
-          case 'room:playAgain':
-            E.playAgain(r, ctx, a);
-            break;
-          case 'card:draw':
-            E.draw(r, ctx, a);
-            events.push({ type: 'card:dealt', payload: { dealSeq: r.runtime.dealSeq } });
-            break;
-          case 'card:swap':
-            E.swap(r, ctx);
-            events.push({ type: 'card:dealt', payload: { dealSeq: r.runtime.dealSeq } });
-            break;
-          case 'roles:swap':
-            E.rolesSwap(r, ctx);
-            break;
-          case 'roles:confirm':
-            E.rolesConfirm(r, ctx, payload.assignment as Record<string, string> | undefined);
-            break;
-          case 'card:startTimer':
-            E.startTimer(r, ctx);
-            break;
-          case 'card:done': {
-            const card = E.done(r, ctx);
-            void this.metrics.inc(`cards_completed:${card.genre}`);
-            break;
-          }
-          case 'card:skip':
-            E.skip(r, ctx);
-            break;
-          case 'card:never':
-            neverCardId = E.never(r, ctx);
-            break;
-          case 'deck:reshuffle':
-            E.reshuffle(r, ctx);
-            break;
-          case 'turn:set':
-            E.setTurn(r, a, payload.playerId as string);
-            break;
-          case 'game:pause':
-            E.pause(r, ctx);
-            break;
-          case 'game:resume':
-            E.resume(r, ctx);
-            break;
-          case 'game:stop':
-            E.stop(r, ctx);
-            events.push({ type: 'game:stopped', payload: {} });
-            void this.metrics.inc('stop_used');
-            break;
-          case 'game:end':
-            E.end(r, ctx);
-            break;
-          case 'host:kick': {
-            const target = r.players.find((p) => p.id === payload.playerId);
-            kickedLast = !E.kick(r, ctx, a, payload.playerId as string);
-            events.push({
-              type: 'room:kicked',
-              payload: { sessionId: target?.sessionId ?? '' },
-            });
-            break;
-          }
-          default:
-            throw new EngineError('UNKNOWN_EVENT');
+    let deleteAfter = false;
+    const { room, sessions: s } = await this.withRoom({ code }, async (r, ctx, tx) => {
+      const actor = this.memberOrThrow(r, session.id);
+      if (actor.activeTab && actor.activeTab !== tabId) throw new EngineError('SUPERSEDED');
+      const seen = r.runtime.recentActions ?? [];
+      if (seen.includes(payload.actionId)) return { save: false }; // duplicate delivery
+      actor.lastSeenAt = Date.now();
+      const a = actor.id;
+      switch (event) {
+        case 'room:setGenres':
+          E.setGenres(r, ctx, a, payload.genres as Genre[]);
+          break;
+        case 'room:setOptions':
+          E.setOptions(r, a, payload as Parameters<typeof E.setOptions>[2]);
+          break;
+        case 'room:setRolePrefs':
+          E.setRolePrefs(r, a, payload.playerId as string, payload.rolePrefs as never);
+          break;
+        case 'room:proposeTrack':
+          E.proposeTrack(r, ctx, a, payload.track as string);
+          break;
+        case 'room:confirmTrack':
+          E.confirmTrack(r, a);
+          break;
+        case 'room:addLocal':
+          E.addLocal(r, ctx, a, randomUUID(), payload.player as LocalProfile);
+          break;
+        case 'room:updateLocal':
+          E.updateLocal(r, ctx, a, payload.playerId as string, payload.player as LocalProfile);
+          break;
+        case 'room:removeLocal':
+          E.removeLocal(r, ctx, a, payload.playerId as string);
+          break;
+        case 'room:start':
+          E.start(r, ctx, a);
+          void this.metrics.inc('rooms_started');
+          break;
+        case 'room:playAgain':
+          E.playAgain(r, ctx, a);
+          break;
+        case 'room:leave':
+          deleteAfter = !E.removePlayer(r, ctx, a);
+          if (deleteAfter) endIfLive(r, ctx);
+          break;
+        case 'card:draw':
+          E.draw(r, ctx, a);
+          break;
+        case 'card:swap':
+          E.swap(r, ctx);
+          break;
+        case 'roles:swap':
+          E.rolesSwap(r, ctx);
+          break;
+        case 'roles:confirm':
+          E.rolesConfirm(r, ctx, payload.assignment as Record<string, string> | undefined);
+          break;
+        case 'card:startTimer':
+          E.startTimer(r, ctx);
+          break;
+        case 'card:done': {
+          const card = E.done(r, ctx);
+          void this.metrics.inc(`cards_completed:${card.genre}`);
+          break;
         }
-        seen.push(payload.actionId);
-        if (seen.length > RECENT_ACTIONS) seen.splice(0, seen.length - RECENT_ACTIONS);
-        this.recent.set(r.id, seen);
-      },
-      events,
-    );
-    if (kickedLast) await this.deleteRoom(room.id);
-    if (neverCardId) await this.addNeverCard(session.id, neverCardId);
+        case 'card:skip':
+          E.skip(r, ctx);
+          break;
+        case 'card:never': {
+          const cardId = E.never(r, ctx);
+          await this.addNeverCard(tx, session.id, cardId);
+          break;
+        }
+        case 'deck:reshuffle':
+          E.reshuffle(r, ctx);
+          break;
+        case 'turn:set':
+          E.setTurn(r, a, payload.playerId as string);
+          break;
+        case 'game:pause':
+          E.pause(r, ctx);
+          break;
+        case 'game:resume':
+          E.resume(r, ctx);
+          break;
+        case 'game:stop':
+          E.stop(r, ctx);
+          void this.metrics.inc('stop_used');
+          break;
+        case 'game:end':
+          E.end(r, ctx);
+          break;
+        case 'host:kick':
+          deleteAfter = !E.kick(r, ctx, a, payload.playerId as string);
+          break;
+        default:
+          throw new EngineError('UNKNOWN_EVENT');
+      }
+      seen.push(payload.actionId);
+      r.runtime.recentActions = seen.slice(-RECENT_ACTIONS);
+      return undefined;
+    });
+    if (deleteAfter) {
+      await this.deleteRoom(room.id);
+      return null;
+    }
+    if (event === 'room:leave') return null;
+    return this.snapshotOf(room, s, session.id);
   }
 
-  private async addNeverCard(sessionId: string, cardId: string): Promise<void> {
-    const [row] = await this.db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  private async addNeverCard(tx: DB, sessionId: string, cardId: string): Promise<void> {
+    const [row] = await tx.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     if (!row) return;
     const b = { ...DEFAULT_BOUNDARIES, ...row.boundaries };
     if (!b.neverCardIds.includes(cardId)) b.neverCardIds = [...b.neverCardIds, cardId].slice(-200);
-    const [updated] = await this.db
-      .update(sessions)
-      .set({ boundaries: b })
-      .where(eq(sessions.id, sessionId))
-      .returning();
-    if (updated) this.cacheSession(updated);
-  }
-
-  /** Test/ops helper. */
-  get size(): number {
-    return this.rooms.size;
+    await tx.update(sessions).set({ boundaries: b }).where(eq(sessions.id, sessionId));
   }
 }

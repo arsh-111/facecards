@@ -31,7 +31,7 @@ export default defineConfig({
         // Offline shell = static assets only; the game itself needs a connection.
         globPatterns: ['**/*.{js,css,html,woff2,png,svg,txt}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//, /^\/socket\.io/, /^\/healthz/],
+        navigateFallbackDenylist: [/^\/api\//, /^\/healthz/],
         runtimeCaching: [],
       },
     }),
@@ -46,7 +46,6 @@ export default defineConfig({
     proxy: {
       '/api': { target: API, changeOrigin: false },
       '/healthz': { target: API },
-      '/socket.io': { target: API, ws: true },
     },
   },
 });

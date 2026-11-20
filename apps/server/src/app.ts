@@ -13,7 +13,6 @@ import { RoomService } from './rooms/service';
 import { findSessionByToken } from './sessions';
 import { HttpError } from './http';
 import { apiRoutes } from './routes/api';
-import { attachRealtime, type Realtime } from './realtime';
 import { PUBLIC_DIR } from './paths';
 
 export interface AppDeps {
@@ -23,7 +22,6 @@ export interface AppDeps {
   rooms: RoomService;
   metrics: Metrics;
   log: FastifyBaseLogger;
-  realtime: Realtime | null;
 }
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -56,7 +54,7 @@ export async function buildApp(opts: {
 
   const metrics = createMetrics(db);
   const rooms = new RoomService(db, cards, cfg, metrics);
-  const deps: AppDeps = { cfg, db, cards, rooms, metrics, log: app.log, realtime: null };
+  const deps: AppDeps = { cfg, db, cards, rooms, metrics, log: app.log };
 
   await app.register(cookie);
   await app.register(helmet, {
@@ -68,10 +66,7 @@ export async function buildApp(opts: {
         styleSrc: ["'self'", "'unsafe-inline'"], // animation libraries set inline style attributes
         imgSrc: ["'self'", 'data:'],
         fontSrc: ["'self'"],
-        connectSrc: [
-          "'self'",
-          ...cfg.allowedOrigins.map((o) => o.replace(/^http/, 'ws')),
-        ],
+        connectSrc: ["'self'"],
         workerSrc: ["'self'"],
         manifestSrc: ["'self'"],
         mediaSrc: ["'self'"],
@@ -114,7 +109,6 @@ export async function buildApp(opts: {
       if (origin && !cfg.allowedOrigins.includes(origin)) throw new HttpError(403, 'ORIGIN');
     }
     req.session = await findSessionByToken(db, req.cookies[cfg.sessionCookie], cfg);
-    if (req.session) rooms.cacheSession(req.session);
   });
 
   app.setErrorHandler((error, req, reply) => {
@@ -151,7 +145,7 @@ export async function buildApp(opts: {
       },
     });
     app.setNotFoundHandler((req, reply) => {
-      if (req.method === 'GET' && !req.url.startsWith('/api/') && !req.url.startsWith('/socket.io')) {
+      if (req.method === 'GET' && !req.url.startsWith('/api/')) {
         return reply.header('Cache-Control', 'no-cache').sendFile('index.html');
       }
       return reply.code(404).send({ error: 'NOT_FOUND' });
@@ -160,10 +154,6 @@ export async function buildApp(opts: {
     app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 'NOT_FOUND' }));
   }
 
-  deps.realtime = await attachRealtime(app, deps);
-  app.addHook('preClose', async () => {
-    await deps.realtime?.close();
-  });
 
   return { app, deps };
 }

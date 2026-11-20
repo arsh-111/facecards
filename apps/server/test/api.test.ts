@@ -141,13 +141,13 @@ describe('rooms over REST', () => {
     expect(code).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
 
     // non-member cannot read room state
-    expect((await t.app.inject({ method: 'GET', url: `/api/rooms/${code}`, cookies: cb })).statusCode).toBe(404);
+    expect((await t.app.inject({ method: 'GET', url: `/api/rooms/${code}`, headers: { 'x-nc-tab': 'test-tab-1' }, cookies: cb })).statusCode).toBe(404);
     // no session cannot read either
-    expect((await t.app.inject({ method: 'GET', url: `/api/rooms/${code}` })).statusCode).toBe(401);
+    expect((await t.app.inject({ method: 'GET', url: `/api/rooms/${code}`, headers: { 'x-nc-tab': 'test-tab-1' } })).statusCode).toBe(401);
 
     const joined = await t.app.inject({ method: 'POST', url: '/api/rooms/join', headers: H, cookies: cb, payload: { code } });
     expect(joined.statusCode).toBe(200);
-    const state = await t.app.inject({ method: 'GET', url: `/api/rooms/${code}`, cookies: cb });
+    const state = await t.app.inject({ method: 'GET', url: `/api/rooms/${code}`, headers: { 'x-nc-tab': 'test-tab-1' }, cookies: cb });
     expect(state.json().players).toHaveLength(2);
     expect(state.json().track).toBe('gay');
 
@@ -155,7 +155,7 @@ describe('rooms over REST', () => {
     expect(me.json().currentRoom).toBe(code); // FR-4
 
     await t.app.inject({ method: 'POST', url: `/api/rooms/${code}/leave`, headers: HN, cookies: cb });
-    expect((await t.app.inject({ method: 'GET', url: `/api/rooms/${code}`, cookies: cb })).statusCode).toBe(404);
+    expect((await t.app.inject({ method: 'GET', url: `/api/rooms/${code}`, headers: { 'x-nc-tab': 'test-tab-1' }, cookies: cb })).statusCode).toBe(404);
   });
 
   it('wrong codes are rejected', async () => {

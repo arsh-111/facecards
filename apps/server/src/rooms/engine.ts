@@ -41,10 +41,14 @@ export interface Player {
   rolePrefs: RolePrefs;
   joinedAt: number;
   leftAt: number | null;
-  // ephemeral presence
+  // presence (derived from lastSeenAt when a room is loaded)
   connected: boolean;
   disconnectedAt: number | null;
   away: boolean;
+  /** Last poll from this player's device. */
+  lastSeenAt?: number | null;
+  /** Browser tab currently playing for this player. */
+  activeTab?: string | null;
 }
 
 export interface DeckEntry {
@@ -695,6 +699,35 @@ export function markAway(room: Room, ctx: EngineCtx, playerId: string): void {
   if (room.runtime.pauseOnAway && room.state === 'playing') pause(room, ctx);
 }
 
+/**
+ * Apply away/return transitions derived from presence (players' `away` flags must already be
+ * set by the caller). Each absence is handled once: the turn moves on and, if enabled, the game
+ * pauses. Returns true when the room changed and must be saved.
+ */
+export function applyPresence(room: Room, ctx: EngineCtx): boolean {
+  const handled = new Set(room.runtime.awayHandled ?? []);
+  let changed = false;
+  for (const p of activePlayers(room)) {
+    if (p.away && !handled.has(p.id)) {
+      handled.add(p.id);
+      changed = true;
+      if (room.runtime.currentPlayerId === p.id) advanceTurn(room, ctx);
+      if (room.runtime.pauseOnAway && room.state === 'playing') pause(room, ctx);
+    } else if (!p.away && handled.has(p.id)) {
+      handled.delete(p.id);
+      changed = true;
+    }
+  }
+  for (const id of [...handled]) {
+    if (!activePlayers(room).some((p) => p.id === id)) {
+      handled.delete(id);
+      changed = true;
+    }
+  }
+  room.runtime.awayHandled = [...handled];
+  return changed;
+}
+
 /* --------------------------------------------------------------- snapshot */
 
 export function snapshot(room: Room, ctx: EngineCtx, viewerSessionId: string | null): RoomSnapshot {
@@ -770,6 +803,7 @@ export function snapshot(room: Room, ctx: EngineCtx, viewerSessionId: string | n
     },
     stats: { ...room.runtime.stats, byGenre: { ...room.runtime.stats.byGenre } },
     serverNow: ctx.now,
+    version: room.runtime.version ?? 0,
     showResponsibleNote: !!viewer && !viewer.seenNote,
     blockers: room.state === 'lobby' ? blockers(room, ctx) : [],
   };

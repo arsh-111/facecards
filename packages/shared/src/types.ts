@@ -80,6 +80,8 @@ export interface RoomSnapshot {
   deck: { total: number; remaining: number; empty: boolean };
   stats: RoomStats;
   serverNow: number;
+  /** Increments on every saved change; lets clients skip re-rendering identical states. */
+  version: number;
   showResponsibleNote: boolean;
   /** Reasons the host cannot start yet (i18n keys). */
   blockers: string[];

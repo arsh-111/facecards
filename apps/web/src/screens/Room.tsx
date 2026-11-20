@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { t } from '../i18n';
 import { api } from '../lib/api';
-import { act, connectRoom, disconnectRoom, rejoin } from '../lib/socket';
+import { act, connectRoom, disconnectRoom, rejoin } from '../lib/sync';
 import { useApp } from '../store';
 import { Shell } from '../components/chrome';
 import { Button, Panel } from '../components/ui';
@@ -35,9 +35,8 @@ export function RoomScreen() {
   }, [upper]);
 
   const leave = async () => {
-    await act('room:leave');
+    disconnectRoom(); // stop polling first so the screen doesn't flash "not in this room"
     await api.leaveRoom(upper).catch(() => {});
-    disconnectRoom();
     await loadMe();
     navigate('/home', { replace: true });
   };

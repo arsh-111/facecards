@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useApp } from '../store';
-import { act } from './socket';
+import { act } from './sync';
 
 /** FR-28: instantly swap to a neutral decoy and pause the game. */
 export function triggerPanic(): void {

@@ -23,7 +23,8 @@
     "icons": "node scripts/gen-icons.mjs",
     "prepare": "husky || true",
     "cards:template": "node scripts/gen-cards-template.mjs",
-    "cards:check": "tsx scripts/check-cards.ts"
+    "cards:check": "tsx scripts/check-cards.ts",
+    "build:vercel": "node scripts/vercel-build.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
@@ -31,6 +32,7 @@
     "@types/node": "^20.19.43",
     "concurrently": "^10.0.7",
     "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.5",
     "eslint-plugin-react-hooks": "^5.2.0",
     "globals": "^17.14.0",

@@ -15,6 +15,8 @@ export const BUCKETS = {
   join: { name: 'join', limit: 20, windowMs: HOUR },
   joinFail: { name: 'join_fail', limit: 10, windowMs: HOUR },
   blocked: { name: 'age_block', limit: 3, windowMs: 24 * HOUR },
+  /** Replaces the old 20 msg/sec WebSocket limit: room actions per session. */
+  actions: { name: 'actions', limit: 240, windowMs: 60 * 1000 },
 } satisfies Record<string, Bucket>;
 
 /** Atomically count a hit; returns true when the caller is still within the limit. */
@@ -48,20 +50,4 @@ export async function isLimited(db: DB, keyHash: string, bucket: Bucket, now = D
 
 export async function purgeRateLimits(db: DB, now = Date.now()): Promise<void> {
   await db.delete(rateLimits).where(lt(rateLimits.windowEnd, new Date(now)));
-}
-
-/** In-memory token bucket for WebSocket messages (20/sec per socket). */
-export class SocketLimiter {
-  private tokens: number;
-  private last = Date.now();
-  constructor(private readonly perSecond = 20) {
-    this.tokens = perSecond;
-  }
-  take(now = Date.now()): boolean {
-    this.tokens = Math.min(this.perSecond, this.tokens + ((now - this.last) / 1000) * this.perSecond);
-    this.last = now;
-    if (this.tokens < 1) return false;
-    this.tokens -= 1;
-    return true;
-  }
 }

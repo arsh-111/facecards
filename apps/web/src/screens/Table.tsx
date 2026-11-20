@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { RoomSnapshot, WsEvent } from '@nc/shared';
+import type { RoomAction, RoomSnapshot } from '@nc/shared';
 import { t } from '../i18n';
-import { act, onRoomEvent } from '../lib/socket';
+import { act, onRoomEvent } from '../lib/sync';
 import { haptics } from '../lib/feedback';
 import { triggerPanic } from '../lib/panic';
 import { useApp } from '../store';
@@ -14,7 +14,7 @@ const SHUFFLE_MS = 1200;
 
 function useRun() {
   const showToast = useApp((s) => s.showToast);
-  return async (event: WsEvent, payload: Record<string, unknown> = {}) => {
+  return async (event: RoomAction, payload: Record<string, unknown> = {}) => {
     const r = await act(event, payload);
     if (!r.ok && r.error) {
       const key = `errors.${r.error}`;

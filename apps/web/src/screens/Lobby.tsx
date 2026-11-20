@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { GENDERS, INTENSITIES, PREFERENCES, type Gender, type Preference, type RoomSnapshot } from '@nc/shared';
 import { t } from '../i18n';
-import { act } from '../lib/socket';
+import { act } from '../lib/sync';
 import { useApp } from '../store';
 import { Button, Panel, SectionTitle, Segmented, Toggle } from '../components/ui';
 import { BoundariesEditor, GenrePicker, RolePrefsEditor } from '../components/forms';

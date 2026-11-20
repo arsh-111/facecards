@@ -157,7 +157,7 @@ export const CreateRoomSchema = z
   .strict();
 export const JoinRoomSchema = z.object({ code: RoomCodeSchema }).strict();
 
-/* ------------------------------------------------------------ websocket */
+/* -------------------------------------------------------- room actions */
 
 const ActionId = z.string().min(8).max(64);
 const base = { actionId: ActionId };
@@ -169,8 +169,8 @@ export const LocalPlayerSchema = z.object({
   preference: PreferenceSchema,
 });
 
-export const WsSchemas = {
-  'room:join': z.object({ ...base, code: RoomCodeSchema }),
+/** Every room mutation. Sent as POST /api/rooms/:code/actions { event, payload }. */
+export const ActionSchemas = {
   'room:setGenres': z.object({ ...base, genres: z.array(GenreSchema).max(GENRES.length) }),
   'room:setOptions': z.object({
     ...base,
@@ -205,6 +205,17 @@ export const WsSchemas = {
   'host:kick': z.object({ ...base, playerId: PlayerId }),
 } as const;
 
-export type WsEvent = keyof typeof WsSchemas;
-export type WsPayload<E extends WsEvent> = z.infer<(typeof WsSchemas)[E]>;
-export const WS_EVENTS = Object.keys(WsSchemas) as WsEvent[];
+export type RoomAction = keyof typeof ActionSchemas;
+export type ActionPayload<E extends RoomAction> = z.infer<(typeof ActionSchemas)[E]>;
+export const ROOM_ACTIONS = Object.keys(ActionSchemas) as RoomAction[];
+
+export const ActionRequestSchema = z
+  .object({
+    event: z.enum(ROOM_ACTIONS as [RoomAction, ...RoomAction[]]),
+    payload: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+/** A browser tab id; the most recently connected tab is the active one for that player. */
+export const TabIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
+export const ConnectSchema = z.object({ tabId: TabIdSchema }).strict();

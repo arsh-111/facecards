@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { DisplayNameSchema, type Genre } from '@nc/shared';
 import { t } from '../i18n';
 import { api, ApiError } from '../lib/api';
-import { disconnectRoom } from '../lib/socket';
+import { disconnectRoom } from '../lib/sync';
 import { useApp, useSettings } from '../store';
 import { Shell } from '../components/chrome';
 import { Button, Panel, SectionTitle, Segmented, Toggle } from '../components/ui';

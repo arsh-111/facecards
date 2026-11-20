@@ -1,4 +1,4 @@
-import type { MeResponse, ProfilePatch, RoomSnapshot } from '@nc/shared';
+import type { MeResponse, ProfilePatch, RoomAction, RoomSnapshot } from '@nc/shared';
 
 export class ApiError extends Error {
   constructor(
@@ -9,8 +9,13 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { 'X-NC-Client': '1' };
+async function request<T>(
+  method: string,
+  url: string,
+  body?: unknown,
+  extraHeaders: Record<string, string> = {},
+): Promise<T> {
+  const headers: Record<string, string> = { 'X-NC-Client': '1', ...extraHeaders };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   let res: Response;
   try {
@@ -18,6 +23,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
       method,
       headers,
       credentials: 'same-origin',
+      cache: 'no-store',
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
@@ -53,6 +59,18 @@ export const api = {
   createRoom: (mode: 'online' | 'pass_and_play', solo = false) =>
     request<{ code: string; mode: string }>('POST', '/api/rooms', { mode, solo }),
   joinRoom: (code: string) => request<{ code: string }>('POST', '/api/rooms/join', { code }),
-  room: (code: string) => request<RoomSnapshot>('GET', `/api/rooms/${code}`),
+  /** Make this tab the active one in the room and get the first snapshot. */
+  connect: (code: string, tabId: string) =>
+    request<RoomSnapshot>('POST', `/api/rooms/${code}/connect`, { tabId }),
+  /** Poll the authoritative room state. */
+  room: (code: string, tabId: string) =>
+    request<RoomSnapshot>('GET', `/api/rooms/${code}`, undefined, { 'X-NC-Tab': tabId }),
+  action: (code: string, tabId: string, event: RoomAction, payload: Record<string, unknown>) =>
+    request<{ snapshot: RoomSnapshot | null }>(
+      'POST',
+      `/api/rooms/${code}/actions`,
+      { event, payload },
+      { 'X-NC-Tab': tabId },
+    ),
   leaveRoom: (code: string) => request<{ ok: boolean }>('POST', `/api/rooms/${code}/leave`),
 };

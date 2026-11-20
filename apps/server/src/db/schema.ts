@@ -69,6 +69,13 @@ export interface RoomRuntime {
   };
   kickedSessions: string[];
   noteShown: boolean;
+  /** Bumped on every saved change. */
+  version?: number;
+  /** Recent client actionIds, for idempotency across stateless server instances. */
+  recentActions?: string[];
+  /** Player ids already handled as away (so a pause is triggered once per absence). */
+  awayHandled?: string[];
+  genresTouched?: boolean;
 }
 
 export const rooms = pgTable('rooms', {
@@ -108,6 +115,10 @@ export const roomPlayers = pgTable(
     rolePrefs: jsonb('role_prefs').$type<RolePrefs>().notNull(),
     joinedAt: ts('joined_at').notNull().defaultNow(),
     leftAt: ts('left_at'),
+    /** Last poll from this player's device (presence). */
+    lastSeenAt: ts('last_seen_at'),
+    /** Random id of the browser tab currently playing; older tabs are told they were superseded. */
+    activeTab: text('active_tab'),
   },
   (t) => [unique('room_players_room_session_uq').on(t.roomId, t.sessionId)],
 );
