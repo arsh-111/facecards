@@ -5,11 +5,14 @@
 // It also applies database migrations against the connected Postgres before deploying.
 import { execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
 const root = new URL('../', import.meta.url);
-const out = new URL('.vercel/output/', root);
+// Vercel reads the output from the project's Root Directory, which is the directory the build
+// runs in: the repo root, or apps/server if the project was imported with that folder.
+const out = new URL('.vercel/output/', pathToFileURL(`${process.cwd()}/`));
+console.log(`building from ${process.cwd()} → ${fileURLToPath(out)}`);
 const fn = new URL('functions/api.func/', out);
 const run = (cmd) => execSync(cmd, { stdio: 'inherit', cwd: root });
 const onVercel = !!process.env.VERCEL;
