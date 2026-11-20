@@ -5,6 +5,7 @@ import { t } from '../i18n';
 import { useReduced } from '../lib/motion';
 import { exitPanic, triggerPanic, useDoubleTap } from '../lib/panic';
 import { useApp } from '../store';
+/**#Updated**/
 
 const CONTACT = import.meta.env.VITE_CONTACT_EMAIL ?? 'vers.nude.22@gmail.com';
 
