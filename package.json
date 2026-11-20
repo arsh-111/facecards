@@ -21,7 +21,9 @@
     "test:e2e": "playwright test",
     "db:generate": "drizzle-kit generate",
     "icons": "node scripts/gen-icons.mjs",
-    "prepare": "husky || true"
+    "prepare": "husky || true",
+    "cards:template": "node scripts/gen-cards-template.mjs",
+    "cards:check": "tsx scripts/check-cards.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

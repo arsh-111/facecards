@@ -14,6 +14,12 @@ export default defineConfig({
     url: `http://localhost:${PORT}/healthz`,
     reuseExistingServer: false,
     timeout: 60_000,
-    env: { NODE_ENV: 'test', PORT: String(PORT), ALLOWED_ORIGIN: `http://localhost:${PORT}` },
+    // Pin the placeholder deck so the smoke test never depends on owner card content.
+    env: {
+      NODE_ENV: 'test',
+      PORT: String(PORT),
+      ALLOWED_ORIGIN: `http://localhost:${PORT}`,
+      CARDS_PATH: 'data/cards.sample.json',
+    },
   },
 });
