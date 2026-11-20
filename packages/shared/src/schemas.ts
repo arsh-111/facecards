@@ -63,7 +63,9 @@ export type CardsFile = z.infer<typeof CardsFileSchema>;
 export const DisplayNameSchema = z
   .string()
   .trim()
-  .regex(/^[\p{L}\p{N} _.'-]{2,20}$/u, 'Nickname must be 2-20 letters, numbers or spaces');
+  // \p{M} (combining marks) is required for scripts such as Devanagari: "प्रिया" uses vowel signs.
+  .regex(/^[\p{L}\p{M}\p{N} _.'-]{2,20}$/u, 'Nickname must be 2-20 letters, numbers or spaces')
+  .refine((s) => /\p{L}/u.test(s), 'Nickname must contain a letter');
 
 export const SettingsSchema = z.object({
   sound: z.boolean(),

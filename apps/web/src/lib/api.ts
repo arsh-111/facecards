@@ -12,15 +12,27 @@ export class ApiError extends Error {
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { 'X-NC-Client': '1' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const res = await fetch(url, {
-    method,
-    headers,
-    credentials: 'same-origin',
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers,
+      credentials: 'same-origin',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    // Network failure: offline, or the server is not running.
+    throw new ApiError(0, 'UNREACHABLE');
+  }
   if (res.status === 204) return undefined as T;
-  const data = (await res.json().catch(() => ({}))) as { error?: string };
-  if (!res.ok) throw new ApiError(res.status, data.error ?? 'SERVER_ERROR');
+  const data = (await res.json().catch(() => null)) as { error?: string } | null;
+  if (!res.ok) {
+    // Our server always answers errors with JSON `{ error }`. A non-JSON 5xx comes from a proxy
+    // or gateway in front of it (dev proxy, load balancer), meaning the app server is unreachable.
+    if (!data?.error && res.status >= 500) throw new ApiError(res.status, 'UNREACHABLE');
+    throw new ApiError(res.status, data?.error ?? 'SERVER_ERROR');
+  }
+  if (data === null) throw new ApiError(res.status, 'SERVER_ERROR');
   return data as T;
 }
 

@@ -246,6 +246,7 @@
     "DECK_EMPTY": "The deck is empty.",
     "NOT_READY": "Not ready to start yet.",
     "ROOM_FULL": "The room is full.",
-    "SERVER_ERROR": "Something went wrong. Please try again."
+    "SERVER_ERROR": "Something went wrong. Please try again.",
+    "UNREACHABLE": "Can't reach the server. Check your connection, or make sure the app server is running, then try again."
   }
 }

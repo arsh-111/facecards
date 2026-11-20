@@ -6,7 +6,7 @@ import {
   intersectGenres,
   shuffle,
 } from '../src/deck';
-import { CardsFileSchema, type Card } from '../src/schemas';
+import { CardsFileSchema, DisplayNameSchema, type Card } from '../src/schemas';
 import { ageBand, ageFromDob, isAdult } from '../src/age';
 import { generateRoomCode, isValidRoomCode } from '../src/roomCode';
 import { ROOM_CODE_ALPHABET } from '../src/constants';
@@ -133,6 +133,20 @@ describe('age', () => {
     expect(ageFromDob('2030-01-01', now)).toBeNull();
     expect(isAdult(17)).toBe(false);
     expect(isAdult(18)).toBe(true);
+  });
+});
+
+describe('display names', () => {
+  const ok = (s: string) => DisplayNameSchema.safeParse(s).success;
+  it('accepts names in many scripts, including combining vowel signs', () => {
+    for (const n of ['Sam', 'Zoë', 'José', 'प्रिया', 'অনিক', 'தமிழ்', 'Anna-Maria', "O'Neil", 'J.D.', 'Sam_01', '  Sam  ']) {
+      expect(ok(n), n).toBe(true);
+    }
+  });
+  it('rejects too short, too long, symbols, and names with no letter', () => {
+    for (const n of ['A', 'x'.repeat(21), 'Sam!', 'Love❤', '<b>', '12', '--']) {
+      expect(ok(n), n).toBe(false);
+    }
   });
 });
 

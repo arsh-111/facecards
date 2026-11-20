@@ -14,6 +14,7 @@ const joinErrors: Record<string, string> = {
   IN_PROGRESS: 'home.started',
   RATE_LIMITED: 'home.rateLimited',
   INVALID_INPUT: 'home.badCode',
+  UNREACHABLE: 'errors.UNREACHABLE',
 };
 
 export function Header() {

@@ -96,7 +96,7 @@ export async function buildApp(opts: {
   app.addHook('onResponse', async (req, reply) => {
     req.log.info(
       {
-        reqId: req.id,
+        // reqId is already attached by Fastify's per-request logger.
         route: req.routeOptions.url ?? 'static',
         status: reply.statusCode,
         ms: Math.round(reply.elapsedTime),
